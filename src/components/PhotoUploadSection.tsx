@@ -1,14 +1,21 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { Camera, Upload, Sparkles, Loader2, Check, AlertCircle, X, PenTool, Image as ImageIcon } from 'lucide-react';
-import { Meal, MealAnalysisResult, MealType } from '@/types/meal';
+import { Upload, Sparkles, Loader2, Check, AlertCircle, X, Camera, RefreshCw } from 'lucide-react';
+import { MealAnalysisResult } from '@/types/meal';
 import { compressImage } from '@/lib/imageUtils';
 import { getClientConfig } from '@/lib/supabase';
 
 interface PhotoUploadSectionProps {
   selectedDate: string;
-  onMealAdded: (meal: Omit<Meal, 'id' | 'created_at'>) => Promise<void>;
+  onMealAdded: (meal: {
+    date: string;
+    food_name: string;
+    calories: number;
+    carbs?: number;
+    protein?: number;
+    fat?: number;
+  }) => Promise<boolean>;
   onOpenSettings?: () => void;
 }
 
@@ -17,52 +24,46 @@ export function PhotoUploadSection({
   onMealAdded,
   onOpenSettings,
 }: PhotoUploadSectionProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [mode, setMode] = useState<'photo' | 'manual'>('photo');
-
-  // Photo analysis state
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<MealAnalysisResult | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Form edit fields
-  const [foodName, setFoodName] = useState('');
+  // Form fields
+  const [foodName, setFoodName] = useState<string>('');
   const [calories, setCalories] = useState<number | ''>('');
-  const [mealType, setMealType] = useState<MealType>('점심');
-  const [description, setDescription] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
+  const [carbs, setCarbs] = useState<number | ''>('');
+  const [protein, setProtein] = useState<number | ''>('');
+  const [fat, setFat] = useState<number | ''>('');
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [showManualInput, setShowManualInput] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   const resetForm = () => {
     setSelectedImage(null);
-    setAnalysisResult(null);
     setAnalysisError(null);
+    setSaveError(null);
     setFoodName('');
     setCalories('');
-    setMealType('점심');
-    setDescription('');
+    setCarbs('');
+    setProtein('');
+    setFat('');
     setIsAnalyzing(false);
     setIsSaving(false);
-  };
-
-  const handleClose = () => {
-    resetForm();
-    setIsOpen(false);
   };
 
   const processAndAnalyzeImage = async (file: File) => {
     try {
       setAnalysisError(null);
+      setSaveError(null);
       setIsAnalyzing(true);
 
-      // Compress client-side
+      // Client-side compression
       const compressedDataUrl = await compressImage(file);
       setSelectedImage(compressedDataUrl);
 
-      // Get user config if custom Gemini key is saved
+      // Custom API key if configured
       const config = getClientConfig();
 
       const response = await fetch('/api/analyze', {
@@ -82,32 +83,34 @@ export function PhotoUploadSection({
       try {
         data = await response.json();
       } catch {
-        // fallback
+        // ignore json parse error
       }
 
       if (!response.ok) {
         throw new Error(data.error || `서버 오류가 발생했습니다 (코드: ${response.status})`);
       }
 
-      const foodName = data.food_name || data.analysis?.food_name || '분석 실패';
-      const calories = typeof data.calories === 'number' ? data.calories : (data.analysis?.calories || 0);
+      const analyzedName = data.food_name || '분석 실패';
+      const analyzedCalories = typeof data.calories === 'number' ? data.calories : 0;
+      const analyzedCarbs = typeof data.carbs === 'number' ? data.carbs : 0;
+      const analyzedProtein = typeof data.protein === 'number' ? data.protein : 0;
+      const analyzedFat = typeof data.fat === 'number' ? data.fat : 0;
 
-      const result: MealAnalysisResult = {
-        food_name: foodName,
-        calories: calories,
-        meal_type: data.analysis?.meal_type || '점심',
-        description: data.analysis?.description || '',
-      };
-
-      setAnalysisResult(result);
-      setFoodName(result.food_name);
-      setCalories(result.calories);
-      setMealType(result.meal_type || '점심');
-      setDescription(result.description || '');
+      setFoodName(analyzedName);
+      setCalories(analyzedCalories);
+      setCarbs(analyzedCarbs);
+      setProtein(analyzedProtein);
+      setFat(analyzedFat);
     } catch (err: unknown) {
       console.error('Image analysis error:', err);
-      const msg = err instanceof Error ? err.message : '사진 분석 중 오류가 발생했습니다.';
+      const msg = err instanceof Error ? err.message : '음식 사진 분석 중 오류가 발생했습니다.';
       setAnalysisError(msg);
+      // Fallback values so user can still manually edit and save
+      setFoodName('분석 실패');
+      setCalories(0);
+      setCarbs(0);
+      setProtein(0);
+      setFat(0);
     } finally {
       setIsAnalyzing(false);
     }
@@ -118,7 +121,6 @@ export function PhotoUploadSection({
     if (file) {
       await processAndAnalyzeImage(file);
     }
-    // reset input value so re-selecting the same file works
     e.target.value = '';
   };
 
@@ -142,359 +144,315 @@ export function PhotoUploadSection({
       return;
     }
     if (calories === '' || Number(calories) < 0) {
-      alert('올바른 칼로리를 입력해 주세요.');
+      alert('올바른 칼로리 숫자를 입력해 주세요.');
       return;
     }
 
+    setSaveError(null);
     try {
       setIsSaving(true);
-      await onMealAdded({
+
+      // date: 현재 선택된 날짜 (YYYY-MM-DD 형식, 로컬 시간 기준)
+      let dateToSave = selectedDate;
+      if (!dateToSave || !dateToSave.includes('-')) {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        dateToSave = `${year}-${month}-${day}`;
+      }
+
+      const success = await onMealAdded({
+        date: dateToSave,
         food_name: foodName.trim(),
-        calories: Number(calories),
-        date: selectedDate,
-        meal_type: mealType,
-        description: description.trim() || null,
-        image_url: selectedImage || null,
+        calories: Math.max(0, Math.round(Number(calories))),
+        carbs: carbs !== '' ? Math.max(0, Math.round(Number(carbs))) : 0,
+        protein: protein !== '' ? Math.max(0, Math.round(Number(protein))) : 0,
+        fat: fat !== '' ? Math.max(0, Math.round(Number(fat))) : 0,
       });
 
-      handleClose();
+      if (success) {
+        resetForm();
+        setShowManualInput(false);
+      } else {
+        setSaveError('저장에 실패했습니다. 다시 시도해주세요.');
+      }
     } catch (err) {
-      console.error('Failed to save meal:', err);
-      alert('식사 저장 중 오류가 발생했습니다.');
+      console.error('Save meal error:', err);
+      setSaveError('저장에 실패했습니다. 다시 시도해주세요.');
     } finally {
       setIsSaving(false);
     }
   };
 
   return (
-    <div className="w-full">
-      {/* Trigger Button */}
-      {!isOpen && (
-        <button
-          onClick={() => setIsOpen(true)}
-          className="w-full bg-white hover:bg-slate-50 border-2 border-dashed border-emerald-300 hover:border-emerald-500 rounded-3xl p-5 text-center transition group shadow-xs cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-3"
+    <div className="w-full bg-white rounded-2xl border border-slate-200 shadow-xs p-5 sm:p-6 space-y-4">
+      {/* 2. 업로드 영역: 점선 테두리 박스 및 안내 문구 */}
+      {!selectedImage && !showManualInput ? (
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          className="border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-2xl p-6 sm:p-10 text-center flex flex-col items-center justify-center transition cursor-pointer bg-slate-50/50 hover:bg-emerald-50/20 group"
         >
-          <div className="w-12 h-12 rounded-2xl bg-emerald-500 text-white flex items-center justify-center group-hover:scale-105 transition shadow-sm">
-            <Camera className="w-6 h-6" />
+          <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-3 group-hover:scale-105 transition shadow-xs">
+            <Upload className="w-7 h-7" />
           </div>
-          <div className="text-center sm:text-left">
-            <div className="flex items-center justify-center sm:justify-start gap-1.5">
-              <span className="text-base font-bold text-slate-900">
-                음식 사진 업로드 & 칼로리 분석
-              </span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800">
-                <Sparkles className="w-3 h-3" />
-                Gemini AI
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              사진을 올리면 AI가 음식 이름과 칼로리를 자동으로 계산하여 기록합니다
-            </p>
-          </div>
-        </button>
-      )}
+          <h3 className="text-base sm:text-lg font-bold text-slate-800 group-hover:text-emerald-700 transition">
+            여기에 사진을 드래그하거나 클릭해서 올리세요.
+          </h3>
+          <p className="text-xs text-slate-400 mt-1">
+            Gemini AI가 음식 이름, 칼로리, 탄수화물, 단백질, 지방을 자동 분석합니다. (최대 4MB)
+          </p>
 
-      {/* Expanded Modal / Card */}
-      {isOpen && (
-        <div className="w-full bg-white rounded-3xl border border-slate-200 shadow-lg p-5 sm:p-6 transition animate-in fade-in zoom-in-95 duration-200">
-          <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-5">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
-                <Sparkles className="w-4 h-4" />
-              </div>
-              <h2 className="text-base sm:text-lg font-bold text-slate-900">
-                식사 기록 추가 ({selectedDate})
-              </h2>
-            </div>
-            <button
-              onClick={handleClose}
-              className="w-8 h-8 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 flex items-center justify-center cursor-pointer transition"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          {/* Mode Switch Tabs */}
-          <div className="flex rounded-xl bg-slate-100 p-1 mb-5">
+          <div className="mt-4 flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setMode('photo');
-                setAnalysisError(null);
+              onClick={(e) => {
+                e.stopPropagation();
+                fileInputRef.current?.click();
               }}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs sm:text-sm font-bold rounded-lg transition cursor-pointer ${
-                mode === 'photo'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-900'
-              }`}
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
             >
-              <Camera className="w-4 h-4 text-emerald-600" />
-              <span>사진 AI 분석</span>
+              <Camera className="w-4 h-4" />
+              <span>사진 선택</span>
             </button>
             <button
               type="button"
-              onClick={() => setMode('manual')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs sm:text-sm font-bold rounded-lg transition cursor-pointer ${
-                mode === 'manual'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-500 hover:text-slate-900'
-              }`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowManualInput(true);
+              }}
+              className="px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-semibold transition cursor-pointer"
             >
-              <PenTool className="w-4 h-4 text-slate-600" />
-              <span>직접 입력</span>
+              직접 입력하기
             </button>
           </div>
 
-          {/* PHOTO MODE */}
-          {mode === 'photo' && (
-            <div className="space-y-4">
-              {!selectedImage ? (
-                /* Drop & Upload Box */
-                <div
-                  onDrop={handleDrop}
-                  onDragOver={handleDragOver}
-                  className="border-2 border-dashed border-slate-200 hover:border-emerald-400 rounded-2xl p-6 sm:p-10 text-center flex flex-col items-center justify-center transition bg-slate-50/50"
-                >
-                  <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-3">
-                    <Upload className="w-7 h-7" />
-                  </div>
-                  <h3 className="text-sm sm:text-base font-bold text-slate-800">
-                    음식 사진을 여기에 드래그하거나 선택하세요
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1 mb-4">
-                    JPG, PNG, WEBP 지원 (스마트폰 촬영 사진 가능)
-                  </p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+        </div>
+      ) : null}
 
-                  <div className="flex flex-wrap items-center justify-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Upload className="w-4 h-4" />
-                      <span>파일 선택</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => cameraInputRef.current?.click()}
-                      className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs sm:text-sm font-semibold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Camera className="w-4 h-4" />
-                      <span>카메라로 촬영</span>
-                    </button>
-                  </div>
-
-                  {/* Hidden inputs */}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
-                  <input
-                    ref={cameraInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
-                </div>
-              ) : (
-                /* Image Preview & Analysis Card */
-                <div className="space-y-4">
-                  <div className="relative rounded-2xl overflow-hidden bg-slate-100 max-h-72 flex items-center justify-center border border-slate-200">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={selectedImage}
-                      alt="Uploaded Food"
-                      className="max-h-72 w-full object-contain"
-                    />
-
-                    {/* Change photo button */}
-                    {!isAnalyzing && (
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="absolute bottom-3 right-3 px-3 py-1.5 rounded-xl bg-black/60 hover:bg-black/80 backdrop-blur-xs text-white text-xs font-medium transition cursor-pointer flex items-center gap-1"
-                      >
-                        <ImageIcon className="w-3.5 h-3.5" />
-                        <span>사진 변경</span>
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Hidden input for change photo */}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
-
-                  {/* Loading state */}
-                  {isAnalyzing && (
-                    <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-6 text-center flex flex-col items-center justify-center animate-pulse">
-                      <Loader2 className="w-8 h-8 text-emerald-600 animate-spin mb-2" />
-                      <h4 className="text-sm font-bold text-emerald-900">
-                        Gemini 3.8 Flash가 음식을 분석하는 중...
-                      </h4>
-                      <p className="text-xs text-emerald-700 mt-1">
-                        사진 속 식재료와 양을 파악하여 칼로리를 산출하고 있습니다.
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Analysis Error */}
-                  {analysisError && (
-                    <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3 text-rose-800 text-xs sm:text-sm">
-                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-                      <div className="flex-1">
-                        <p className="font-semibold">{analysisError}</p>
-                        {analysisError.includes('API') && onOpenSettings && (
-                          <button
-                            type="button"
-                            onClick={onOpenSettings}
-                            className="mt-2 text-xs underline font-bold text-rose-900 hover:text-rose-950 cursor-pointer block"
-                          >
-                            ⚙️ Gemini API 키 설정 열기
-                          </button>
-                        )}
-                        <p className="text-xs text-rose-600 mt-2">
-                          아래 양식에서 음식 이름과 칼로리를 직접 입력하여 저장할 수도 있습니다.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+      {/* 사진이 선택되었을 때: 썸네일 미리보기 표시 및 분석 결과/입력 폼 */}
+      {(selectedImage || showManualInput) && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-600" />
+              <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                {selectedImage ? '음식 사진 분석 및 저장' : '식사 직접 입력'}
+              </h3>
             </div>
-          )}
+            <button
+              type="button"
+              onClick={resetForm}
+              className="text-xs font-semibold text-slate-400 hover:text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-100 flex items-center gap-1 transition cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>취소</span>
+            </button>
+          </div>
 
-          {/* EDIT FORM (Visible when in manual mode OR after photo is uploaded/analyzed) */}
-          {(mode === 'manual' || selectedImage) && (
-            <div className="mt-5 space-y-4 pt-4 border-t border-slate-100">
-              {analysisResult && (
-                <div className="flex items-center justify-between bg-emerald-50 text-emerald-800 px-3 py-2 rounded-xl text-xs font-semibold">
-                  <div className="flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Gemini AI 분석 완료! 내용을 확인하고 필요한 경우 수정하세요.</span>
-                  </div>
-                  {analysisResult.confidence && (
-                    <span className="text-[11px] bg-emerald-100 px-2 py-0.5 rounded-full">
-                      신뢰도: {analysisResult.confidence}
-                    </span>
-                  )}
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {/* Food Name */}
-                <div className="sm:col-span-2 space-y-1">
-                  <label className="text-xs font-bold text-slate-700 block">
-                    음식 명칭 <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="예: 김치찌개, 연어 샐러드"
-                    value={foodName}
-                    onChange={(e) => setFoodName(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                  />
-                </div>
-
-                {/* Calories */}
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700 block">
-                    칼로리 (kcal) <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      placeholder="예: 450"
-                      value={calories}
-                      onChange={(e) =>
-                        setCalories(e.target.value === '' ? '' : Number(e.target.value))
-                      }
-                      className="w-full px-3.5 py-2.5 pr-12 rounded-xl border border-slate-200 text-sm font-bold text-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-                    />
-                    <span className="absolute right-3 top-2.5 text-xs font-bold text-slate-400">
-                      kcal
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Meal Type Radio / Buttons */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 block">
-                  식사 구분
-                </label>
-                <div className="grid grid-cols-4 gap-2">
-                  {(['아침', '점심', '저녁', '간식'] as MealType[]).map((type) => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => setMealType(type)}
-                      className={`py-2 text-xs font-bold rounded-xl border transition cursor-pointer ${
-                        mealType === type
-                          ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs'
-                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      {type}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Description */}
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-700 block">
-                  상세 설명 및 분량 (선택)
-                </label>
-                <textarea
-                  rows={2}
-                  placeholder="예: 밥 1공기, 찌개 1뚝배기, 밑반찬 포함"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs sm:text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+          {/* 썸네일 미리보기 */}
+          {selectedImage && (
+            <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-50 rounded-2xl p-4 border border-slate-200">
+              <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-xl overflow-hidden bg-slate-200 shrink-0 border border-slate-300 shadow-xs">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={selectedImage}
+                  alt="음식 미리보기"
+                  className="w-full h-full object-cover"
                 />
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={handleClose}
-                  disabled={isSaving}
-                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs sm:text-sm font-semibold transition cursor-pointer"
-                >
-                  취소
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveMeal}
-                  disabled={isSaving || isAnalyzing || !foodName.trim()}
-                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs sm:text-sm font-bold shadow-sm transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isSaving ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>DB에 저장 중...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Check className="w-4 h-4" />
-                      <span>식사 기록 저장하기</span>
-                    </>
-                  )}
-                </button>
+              <div className="flex-1 w-full text-center sm:text-left">
+                {isAnalyzing ? (
+                  <div className="flex flex-col items-center sm:items-start gap-2 py-2">
+                    <div className="flex items-center gap-2 text-emerald-600 font-bold text-sm">
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span>Gemini AI가 음식과 영양소를 분석하는 중...</span>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      사진을 분석하여 음식명, 칼로리, 탄수화물, 단백질, 지방을 계산하고 있습니다.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-center sm:justify-start gap-2">
+                      <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full">
+                        AI 분석 완료
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="text-xs text-slate-500 hover:text-slate-700 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>사진 변경</span>
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      필요한 경우 아래에서 음식 이름이나 칼로리를 수정한 뒤 저장하세요.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+
+          {/* 에러 메시지 */}
+          {analysisError && (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2.5 text-rose-800 text-xs">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-bold">{analysisError}</p>
+                {analysisError.includes('API') && onOpenSettings && (
+                  <button
+                    type="button"
+                    onClick={onOpenSettings}
+                    className="mt-1 underline font-semibold text-rose-900 cursor-pointer block"
+                  >
+                    ⚙️ Gemini API 키 설정 열기
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 음식명 및 칼로리 입력 폼 */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+            <div>
+              <label className="text-xs font-bold text-slate-700 block mb-1">
+                음식 이름 <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                placeholder="예: 김치찌개, 연어 샐러드"
+                value={foodName}
+                onChange={(e) => setFoodName(e.target.value)}
+                disabled={isAnalyzing || isSaving}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 block mb-1">
+                예상 칼로리 (kcal) <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  placeholder="예: 450"
+                  value={calories}
+                  onChange={(e) =>
+                    setCalories(e.target.value === '' ? '' : Number(e.target.value))
+                  }
+                  disabled={isAnalyzing || isSaving}
+                  className="w-full px-3.5 py-2.5 pr-12 rounded-xl border border-slate-200 text-sm font-bold text-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <span className="absolute right-3.5 top-2.5 text-xs font-bold text-slate-400">
+                  kcal
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* 영양소 3종 (탄수화물, 단백질, 지방) */}
+          <div className="grid grid-cols-3 gap-2.5">
+            <div>
+              <label className="text-xs font-semibold text-slate-600 block mb-1">
+                탄수화물 (g)
+              </label>
+              <input
+                type="number"
+                placeholder="0"
+                value={carbs}
+                onChange={(e) => setCarbs(e.target.value === '' ? '' : Number(e.target.value))}
+                disabled={isAnalyzing || isSaving}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-600 block mb-1">
+                단백질 (g)
+              </label>
+              <input
+                type="number"
+                placeholder="0"
+                value={protein}
+                onChange={(e) => setProtein(e.target.value === '' ? '' : Number(e.target.value))}
+                disabled={isAnalyzing || isSaving}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-600 block mb-1">
+                지방 (g)
+              </label>
+              <input
+                type="number"
+                placeholder="0"
+                value={fat}
+                onChange={(e) => setFat(e.target.value === '' ? '' : Number(e.target.value))}
+                disabled={isAnalyzing || isSaving}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+
+          {/* 저장 실패 메시지 */}
+          {saveError && (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-center gap-2 text-rose-700 text-xs sm:text-sm font-semibold">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{saveError}</span>
+            </div>
+          )}
+
+          {/* 하단 저장 버튼 */}
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={resetForm}
+              disabled={isSaving}
+              className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs sm:text-sm font-semibold transition cursor-pointer"
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveMeal}
+              disabled={isSaving || isAnalyzing || !foodName.trim()}
+              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs sm:text-sm font-bold shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>저장 중...</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>저장하기</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       )}
     </div>

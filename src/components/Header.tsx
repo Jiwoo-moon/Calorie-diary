@@ -1,7 +1,9 @@
 'use client';
 
 import React from 'react';
-import { Settings, Utensils, Database, HardDrive } from 'lucide-react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { Settings, Utensils, Database, HardDrive, LineChart, Calendar } from 'lucide-react';
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -9,21 +11,49 @@ interface HeaderProps {
 }
 
 export function Header({ onOpenSettings, isSupabaseConnected }: HeaderProps) {
+  const pathname = usePathname();
+  const isReport = pathname === '/report';
+
   return (
-    <header className="w-full bg-white border-b border-slate-100 sticky top-0 z-30">
+    <header className="w-full bg-white border-b border-slate-100 sticky top-0 z-30 shadow-xs">
       <div className="max-w-3xl mx-auto px-4 h-16 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shadow-sm">
-            <Utensils className="w-5 h-5" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-slate-800 tracking-tight leading-tight">
-              칼로리 다이어리
-            </h1>
-            <p className="text-xs text-slate-400">
-              AI 음식 사진 분석 & 식단 기록
-            </p>
-          </div>
+        <div className="flex items-center gap-2 sm:gap-3">
+          <Link href="/" className="flex items-center gap-2 group">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-bold shadow-xs group-hover:scale-105 transition">
+              <Utensils className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-base sm:text-lg font-extrabold text-slate-900 tracking-tight leading-tight">
+                칼로리 다이어리
+              </h1>
+            </div>
+          </Link>
+
+          {/* Navigation Tabs */}
+          <nav className="flex items-center gap-1 ml-2 sm:ml-4 bg-slate-100 p-1 rounded-xl">
+            <Link
+              href="/"
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition ${
+                !isReport
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+              <span>기록</span>
+            </Link>
+            <Link
+              href="/report"
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition ${
+                isReport
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              <LineChart className="w-3.5 h-3.5 text-sky-600" />
+              <span>주간 리포트</span>
+            </Link>
+          </nav>
         </div>
 
         <div className="flex items-center gap-2">

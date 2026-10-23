@@ -3,7 +3,7 @@
 import React from 'react';
 import { Meal } from '@/types/meal';
 import { MealCard } from './MealCard';
-import { UtensilsCrossed, Sparkles, Loader2 } from 'lucide-react';
+import { Utensils, Loader2 } from 'lucide-react';
 
 interface MealListProps {
   meals: Meal[];
@@ -13,43 +13,29 @@ interface MealListProps {
   onOpenUpload?: () => void;
 }
 
-export function MealList({
-  meals,
-  isLoading,
-  onDelete,
-  onImageClick,
-  onOpenUpload,
-}: MealListProps) {
+export function MealList({ meals, isLoading, onDelete, onImageClick }: MealListProps) {
   if (isLoading) {
     return (
-      <div className="w-full bg-white rounded-3xl border border-slate-100 p-8 flex flex-col items-center justify-center min-h-[220px]">
-        <Loader2 className="w-8 h-8 text-emerald-500 animate-spin mb-3" />
-        <p className="text-sm text-slate-500 font-medium">식사 기록을 불러오는 중...</p>
+      <div className="w-full bg-white rounded-2xl border border-slate-200 p-8 flex flex-col items-center justify-center min-h-[160px]">
+        <Loader2 className="w-7 h-7 text-emerald-500 animate-spin mb-2" />
+        <p className="text-xs sm:text-sm text-slate-500 font-medium">식사 기록을 불러오는 중...</p>
       </div>
     );
   }
 
+  // 목록이 비어 있을 때 “아직 이날 식사 기록이 없습니다.” 문구 표시
   if (meals.length === 0) {
     return (
-      <div className="w-full bg-white rounded-3xl border border-dashed border-slate-200 p-8 sm:p-12 text-center flex flex-col items-center justify-center">
-        <div className="w-16 h-16 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-4">
-          <UtensilsCrossed className="w-8 h-8 stroke-[1.5]" />
+      <div className="w-full bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center flex flex-col items-center justify-center">
+        <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mb-3">
+          <Utensils className="w-6 h-6 stroke-[1.5]" />
         </div>
-        <h3 className="text-base sm:text-lg font-bold text-slate-800">
-          기록된 식사가 없습니다
-        </h3>
-        <p className="text-xs sm:text-sm text-slate-400 max-w-sm mt-1 mb-5 leading-relaxed">
-          음식 사진을 업로드해 보세요! Gemini AI가 음식 이름과 칼로리를 자동으로 계산하여 기록해 줍니다.
+        <p className="text-sm sm:text-base font-semibold text-slate-600">
+          아직 이날 식사 기록이 없습니다.
         </p>
-        {onOpenUpload && (
-          <button
-            onClick={onOpenUpload}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition active:scale-95 cursor-pointer"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>첫 식사 사진 업로드하기</span>
-          </button>
-        )}
+        <p className="text-xs text-slate-400 mt-1">
+          위 업로드 영역에서 사진을 올리거나 직접 입력해 보세요.
+        </p>
       </div>
     );
   }
@@ -62,7 +48,7 @@ export function MealList({
         </h2>
       </div>
 
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         {meals.map((meal) => (
           <MealCard
             key={meal.id}

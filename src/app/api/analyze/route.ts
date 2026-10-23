@@ -12,10 +12,21 @@ const PROMPT_TEXT = `이 음식 사진을 분석해 줘.
 
 {
   "food_name": "음식 이름 (한국어)",
-  "calories": 예상 칼로리 숫자 (정수)
+  "calories": 예상 칼로리 숫자 (정수),
+  "carbs": 탄수화물 그램 수 (정수),
+  "protein": 단백질 그램 수 (정수),
+  "fat": 지방 그램 수 (정수)
 }`;
 
-function parseFoodAnalysisJson(rawText: string): { food_name: string; calories: number } {
+export interface ParsedFoodAnalysis {
+  food_name: string;
+  calories: number;
+  carbs: number;
+  protein: number;
+  fat: number;
+}
+
+function parseFoodAnalysisJson(rawText: string): ParsedFoodAnalysis {
   try {
     let cleaned = rawText.trim();
 
@@ -39,7 +50,7 @@ function parseFoodAnalysisJson(rawText: string): { food_name: string; calories: 
 
     const parsed = JSON.parse(normalized);
     if (!parsed || typeof parsed !== 'object') {
-      return { food_name: '분석 실패', calories: 0 };
+      return { food_name: '분석 실패', calories: 0, carbs: 0, protein: 0, fat: 0 };
     }
 
     const foodName =
@@ -47,18 +58,26 @@ function parseFoodAnalysisJson(rawText: string): { food_name: string; calories: 
         ? parsed.food_name.trim()
         : '분석 실패';
 
-    const caloriesNum = Number(parsed.calories);
-    const calories = isNaN(caloriesNum) ? 0 : Math.max(0, Math.round(caloriesNum));
+    const parseNum = (val: any) => {
+      const num = Number(val);
+      return isNaN(num) ? 0 : Math.max(0, Math.round(num));
+    };
 
     return {
       food_name: foodName,
-      calories,
+      calories: parseNum(parsed.calories),
+      carbs: parseNum(parsed.carbs),
+      protein: parseNum(parsed.protein),
+      fat: parseNum(parsed.fat),
     };
   } catch (err) {
     console.warn('JSON parsing failed, falling back to default:', err);
     return {
       food_name: '분석 실패',
       calories: 0,
+      carbs: 0,
+      protein: 0,
+      fat: 0,
     };
   }
 }
@@ -159,8 +178,11 @@ export async function POST(req: NextRequest) {
               properties: {
                 food_name: { type: 'string' },
                 calories: { type: 'integer' },
+                carbs: { type: 'integer' },
+                protein: { type: 'integer' },
+                fat: { type: 'integer' },
               },
-              required: ['food_name', 'calories'],
+              required: ['food_name', 'calories', 'carbs', 'protein', 'fat'],
             },
           },
         ],
@@ -192,16 +214,22 @@ export async function POST(req: NextRequest) {
       resultText = response.text || '';
     }
 
-    // 3. JSON 파싱 처리 (실패 시 { food_name: '분석 실패', calories: 0 } 반환)
+    // 3. JSON 파싱 처리 (실패 시 기본값 반환)
     const parsedData = parseFoodAnalysisJson(resultText);
 
     return NextResponse.json({
       success: true,
       food_name: parsedData.food_name,
       calories: parsedData.calories,
+      carbs: parsedData.carbs,
+      protein: parsedData.protein,
+      fat: parsedData.fat,
       analysis: {
         food_name: parsedData.food_name,
         calories: parsedData.calories,
+        carbs: parsedData.carbs,
+        protein: parsedData.protein,
+        fat: parsedData.fat,
         meal_type: '점심',
         description: '',
       },

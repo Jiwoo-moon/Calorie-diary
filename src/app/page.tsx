@@ -7,7 +7,7 @@ import {
   insertMeal,
   deleteMeal,
   getClientConfig,
-  getSupabaseClient,
+  saveClientConfig,
 } from '@/lib/supabase';
 import { Header } from '@/components/Header';
 import { DateNavigator } from '@/components/DateNavigator';
@@ -47,12 +47,12 @@ export default function Home() {
       const raw = localStorage.getItem('calorie_diary_config');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed.dailyGoalCalories) {
+        if (parsed.dailyGoalCalories && Number(parsed.dailyGoalCalories) > 0) {
           setDailyGoal(Number(parsed.dailyGoalCalories));
         }
       }
     } catch {
-      // ignore
+      // ignore parse error
     }
   }, []);
 
@@ -63,10 +63,6 @@ export default function Home() {
       try {
         const result = await fetchMealsByDate(date);
         setMeals(result.meals);
-        if (result.isFallback && !result.error?.includes('설정되지 않아')) {
-          // If there was a Supabase fetch issue, gently notify
-          console.info('Loaded from fallback storage:', result.error);
-        }
       } catch (err) {
         console.error('Failed to load meals:', err);
       } finally {
@@ -94,11 +90,14 @@ export default function Home() {
     }
   }, [selectedDate, loadMeals]);
 
-  // Handle adding a meal (analyzed or manual)
+  // Handle adding a meal
   const handleMealAdded = async (mealData: {
     date: string;
     food_name: string;
     calories: number;
+    carbs?: number;
+    protein?: number;
+    fat?: number;
   }): Promise<boolean> => {
     // 1 & 2. Supabase 클라이언트를 사용해 meals 테이블에 date, food_name, calories 추가
     const result = await insertMeal(mealData);
@@ -106,7 +105,7 @@ export default function Home() {
     if (result.success) {
       // 3. 저장 성공 시 식사 목록을 즉시 다시 불러온다
       await loadMeals(mealData.date);
-      showToast('식사가 Supabase meals 테이블에 저장되었습니다!', 'success');
+      showToast('식사 기록이 저장되었습니다!', 'success');
       return true;
     } else {
       // 4. 저장 실패 시 화면에 "저장에 실패했습니다. 다시 시도해주세요." 메시지를 표시한다
@@ -119,11 +118,16 @@ export default function Home() {
   const handleMealDeleted = async (id: string) => {
     const res = await deleteMeal(id);
     if (res.success) {
-      setMeals((prev) => prev.filter((m) => m.id !== id));
+      await loadMeals(selectedDate);
       showToast('식사 기록이 삭제되었습니다.', 'info');
     } else {
-      showToast(`삭제 실패: ${res.error}`, 'warning');
+      showToast(`삭제 실패: ${res.error || '다시 시도해주세요.'}`, 'warning');
     }
+  };
+
+  const handleGoalChange = (newGoal: number) => {
+    setDailyGoal(newGoal);
+    saveClientConfig({ dailyGoalCalories: newGoal });
   };
 
   if (!mounted || !selectedDate) {
@@ -133,11 +137,11 @@ export default function Home() {
           onOpenSettings={() => setSettingsOpen(true)}
           isSupabaseConnected={isSupabaseConnected}
         />
-        <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-6 sm:py-8 space-y-6">
-          <div className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 h-16 flex items-center justify-center animate-pulse">
+        <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-6 sm:py-8 space-y-5">
+          <div className="w-full bg-white rounded-2xl border border-slate-200 p-4 h-16 flex items-center justify-center animate-pulse">
             <span className="text-sm font-semibold text-slate-400">날짜 불러오는 중...</span>
           </div>
-          <div className="w-full bg-white rounded-3xl border border-slate-100 shadow-sm p-6 h-48 animate-pulse" />
+          <div className="w-full bg-white rounded-2xl border border-slate-200 p-6 h-48 animate-pulse" />
         </main>
       </div>
     );
@@ -145,17 +149,17 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-white text-slate-800 flex flex-col font-sans">
-      {/* Header */}
+      {/* 4. 전체배경 흰색 */}
       <Header
         onOpenSettings={() => setSettingsOpen(true)}
         isSupabaseConnected={isSupabaseConnected}
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-6 sm:py-8 space-y-6">
-        {/* Supabase Connection Notice Banner if not configured yet */}
+      <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-6 sm:py-8 space-y-5">
+        {/* Supabase Status Banner if not connected */}
         {!isSupabaseConnected && (
-          <div className="bg-amber-50 border border-amber-200/80 rounded-2xl p-4 flex items-start gap-3 text-amber-900 text-xs sm:text-sm">
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 text-amber-900 text-xs sm:text-sm">
             <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div className="flex-1">
               <span className="font-bold">현재 로컬 브라우저 저장소로 동작 중입니다.</span>
@@ -172,40 +176,40 @@ export default function Home() {
           </div>
         )}
 
-        {/* 1. Date Navigator (Top) */}
+        {/* 1. 상단 헤더: 날짜 이동 버튼(◀ / ▶)이 날짜 좌우에 배치 */}
         <DateNavigator
           selectedDate={selectedDate}
           todayStr={todayStr}
           onDateChange={setSelectedDate}
         />
 
-        {/* 2. Total Calorie Summary Card (Top) */}
+        {/* 1. 상단 총 칼로리 크게 표시 & 하루 목표 칼로리 직접 입력 & 달성률 막대 그래프 (초과 시 빨간색) & 탄·단·지 분석 */}
         <CalorieSummaryCard
           meals={meals}
+          selectedDate={selectedDate}
+          todayStr={todayStr}
           dailyGoal={dailyGoal}
+          onGoalChange={handleGoalChange}
         />
 
-        {/* 3. Photo Upload & Gemini Analysis Section */}
+        {/* 2. 업로드 영역: 점선 테두리 박스, 안내 문구, 썸네일 미리보기 */}
         <PhotoUploadSection
           selectedDate={selectedDate}
           onMealAdded={handleMealAdded}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        {/* 4. Meal List (Card-style items with X delete buttons) */}
+        {/* 3. 식사 목록: 음식명 왼쪽 정렬, 칼로리 오른쪽 정렬, 빈 목록 문구, 연한 회색 테두리 카드 */}
         <MealList
           meals={meals}
           isLoading={isLoading}
           onDelete={handleMealDeleted}
           onImageClick={(url, title) => setLightboxImage({ url, title })}
-          onOpenUpload={() => {
-            window.scrollTo({ top: 300, behavior: 'smooth' });
-          }}
         />
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-100 py-6 text-center text-xs text-slate-400">
+      <footer className="border-t border-slate-100 py-6 text-center text-xs text-slate-400 bg-white">
         <p>음식 칼로리 다이어리 • Powered by Next.js, Google Gemini 3.8 Flash & Supabase</p>
       </footer>
 
@@ -220,7 +224,7 @@ export default function Home() {
         }}
       />
 
-      {/* Full Image Lightbox */}
+      {/* Lightbox Modal */}
       <ImageModal
         isOpen={Boolean(lightboxImage)}
         imageUrl={lightboxImage?.url || null}

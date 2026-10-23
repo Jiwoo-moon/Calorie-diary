@@ -5,6 +5,9 @@ export interface Meal {
   food_name: string;
   calories: number;
   date: string; // YYYY-MM-DD
+  carbs?: number; // 탄수화물 (g)
+  protein?: number; // 단백질 (g)
+  fat?: number; // 지방 (g)
   meal_type?: MealType | string;
   description?: string | null;
   image_url?: string | null;
@@ -14,8 +17,11 @@ export interface Meal {
 export interface MealAnalysisResult {
   food_name: string;
   calories: number;
-  meal_type: MealType;
-  description: string;
+  carbs: number;
+  protein: number;
+  fat: number;
+  meal_type?: MealType;
+  description?: string;
   confidence?: '높음' | '보통' | '낮음' | string;
 }
 
