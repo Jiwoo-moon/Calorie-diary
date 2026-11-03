@@ -16,7 +16,8 @@ import { PhotoUploadSection } from '@/components/PhotoUploadSection';
 import { MealList } from '@/components/MealList';
 import { SettingsModal } from '@/components/SettingsModal';
 import { ImageModal } from '@/components/ImageModal';
-import { CheckCircle2, AlertTriangle, Info } from 'lucide-react';
+import Link from 'next/link';
+import { CheckCircle2, AlertTriangle, Info, LineChart, ChevronRight } from 'lucide-react';
 
 export default function Home() {
   const [mounted, setMounted] = useState<boolean>(false);
@@ -191,6 +192,32 @@ export default function Home() {
           dailyGoal={dailyGoal}
           onGoalChange={handleGoalChange}
         />
+
+        {/* 주간 리포트 꺾은선 그래프 바로가기 배너 */}
+        <Link
+          href="/report"
+          className="w-full bg-gradient-to-r from-emerald-50/80 via-teal-50/60 to-white hover:from-emerald-100/80 hover:to-teal-50 border border-emerald-200/80 rounded-2xl p-4 flex items-center justify-between transition group shadow-xs cursor-pointer"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center group-hover:scale-105 transition shadow-xs shrink-0">
+              <LineChart className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-slate-900 group-hover:text-emerald-900 transition">
+                  최근 7일 주간 리포트 확인하기
+                </h3>
+                <span className="text-[11px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                  꺾은선 그래프
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                최근 7일간의 하루 총 칼로리 섭취 추이와 탄·단·지 영양소 합계를 한눈에 확인하세요
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="w-5 h-5 text-emerald-600 group-hover:translate-x-1 transition shrink-0 ml-2" />
+        </Link>
 
         {/* 2. 업로드 영역: 점선 테두리 박스, 안내 문구, 썸네일 미리보기 */}
         <PhotoUploadSection
