@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
@@ -181,6 +181,17 @@ export async function POST(req: NextRequest) {
           ],
           config: {
             responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                food_name: { type: Type.STRING, description: '음식 이름 (한국어)' },
+                calories: { type: Type.INTEGER, description: '예상 총 칼로리 (kcal, 정수)' },
+                carbs: { type: Type.INTEGER, description: '탄수화물 함량 (g, 정수)' },
+                protein: { type: Type.INTEGER, description: '단백질 함량 (g, 정수)' },
+                fat: { type: Type.INTEGER, description: '지방 함량 (g, 정수)' },
+              },
+              required: ['food_name', 'calories', 'carbs', 'protein', 'fat'],
+            },
           },
         });
 
