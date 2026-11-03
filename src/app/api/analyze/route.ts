@@ -28,7 +28,7 @@ export interface ParsedFoodAnalysis {
 
 function parseFoodAnalysisJson(rawText: string): ParsedFoodAnalysis {
   try {
-    let cleaned = rawText.trim();
+    let cleaned = (rawText || '').trim();
 
     // Remove markdown code fences if present
     const codeBlockMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
@@ -153,65 +153,112 @@ export async function POST(req: NextRequest) {
     });
 
     let resultText = '';
+    let lastError: any = null;
 
-    // Primary: Interactions API
-    try {
-      const interaction = await ai.interactions.create({
-        model: 'gemini-3.8-flash',
-        input: [
-          {
-            type: 'text',
-            text: PROMPT_TEXT,
-          },
-          {
-            type: 'image',
-            data: base64Data,
-            mime_type: detectedMime,
-          },
-        ],
-        response_format: [
-          {
-            type: 'text',
-            mime_type: 'application/json',
-            schema: {
-              type: 'object',
-              properties: {
-                food_name: { type: 'string' },
-                calories: { type: 'integer' },
-                carbs: { type: 'integer' },
-                protein: { type: 'integer' },
-                fat: { type: 'integer' },
+    // Fast and stable model hierarchy:
+    // gemini-3.5-flash-lite is highest-availability and fast for multimodal vision
+    // gemini-3.8-flash is balanced multimodal
+    // gemini-3.1-flash-lite is high-frequency fallback
+    const candidateModels = [
+      'gemini-3.5-flash-lite',
+      'gemini-3.8-flash',
+      'gemini-3.1-flash-lite',
+    ];
+
+    for (const model of candidateModels) {
+      try {
+        console.log(`[analyze] Attempting analysis with model: ${model}...`);
+        const response = await ai.models.generateContent({
+          model,
+          contents: [
+            {
+              inlineData: {
+                data: base64Data,
+                mimeType: detectedMime,
               },
-              required: ['food_name', 'calories', 'carbs', 'protein', 'fat'],
             },
+            PROMPT_TEXT,
+          ],
+          config: {
+            responseMimeType: 'application/json',
           },
-        ],
-      });
+        });
 
-      resultText = interaction.output_text || '';
-    } catch (primaryErr: unknown) {
-      console.warn('Interactions API call error, trying generateContent fallback:', primaryErr);
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: [
-          {
-            parts: [
-              { text: PROMPT_TEXT },
+        if (response && response.text) {
+          resultText = response.text;
+          console.log(`[analyze] Successfully generated content with ${model}`);
+          break;
+        }
+      } catch (modelErr: any) {
+        lastError = modelErr;
+        const msg = modelErr?.message || String(modelErr);
+        console.warn(`[analyze] Model ${model} failed (${modelErr?.status || msg.substring(0, 100)}), trying next fallback...`);
+      }
+    }
+
+    // If models.generateContent all failed, try interactions API as a last resort
+    if (!resultText) {
+      for (const model of ['gemini-3.5-flash-lite', 'gemini-3.8-flash']) {
+        try {
+          console.log(`[analyze] Trying interactions API with ${model}...`);
+          const interaction = await ai.interactions.create({
+            model,
+            input: [
               {
-                inlineData: {
-                  mimeType: detectedMime,
-                  data: base64Data,
-                },
+                type: 'text',
+                text: PROMPT_TEXT,
+              },
+              {
+                type: 'image',
+                data: base64Data,
+                mime_type: detectedMime,
               },
             ],
-          },
-        ],
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
+            response_format: [
+              {
+                type: 'text',
+                mime_type: 'application/json',
+              },
+            ],
+          });
 
-      resultText = response.text || '';
+          if (interaction && interaction.output_text) {
+            resultText = interaction.output_text;
+            console.log(`[analyze] Successfully analyzed with interactions (${model})`);
+            break;
+          }
+        } catch (interactionErr: any) {
+          lastError = interactionErr;
+          console.warn(`[analyze] Interactions API with ${model} failed:`, interactionErr?.message);
+        }
+      }
+    }
+
+    if (!resultText) {
+      console.error('[analyze] All Gemini models failed. Last error:', lastError);
+      let userFriendlyMsg = '구글 Gemini AI 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해 주시거나 아래에서 직접 음식명을 입력해 주세요.';
+
+      const errStr = lastError?.message || String(lastError || '');
+      if (errStr.includes('API_KEY_INVALID') || errStr.includes('invalid api key')) {
+        userFriendlyMsg = 'Gemini API 키가 올바르지 않습니다. 키를 다시 확인해 주세요.';
+      } else if (errStr.includes('QUOTA_EXCEEDED') || errStr.includes('429')) {
+        userFriendlyMsg = 'Gemini API 호출 한도(Quota)가 초과되었습니다. 잠시 후 다시 시도해 주세요.';
+      } else if (errStr.includes('503') || errStr.includes('high demand') || errStr.includes('UNAVAILABLE')) {
+        userFriendlyMsg = '현재 구글 AI 서버 사용량이 급증하여 일시적인 지연이 발생했습니다. 잠시 후 다시 시도해 주세요.';
+      }
+
+      return NextResponse.json(
+        {
+          error: userFriendlyMsg,
+          // Even on error, provide default zero values so client form doesn't break
+          food_name: '분석 실패',
+          calories: 0,
+          carbs: 0,
+          protein: 0,
+          fat: 0,
+        },
+        { status: 500 }
+      );
     }
 
     // 3. JSON 파싱 처리 (실패 시 기본값 반환)
@@ -244,11 +291,18 @@ export async function POST(req: NextRequest) {
       userFriendlyMsg = 'Gemini API 키가 올바르지 않습니다. 키를 다시 확인해 주세요.';
     } else if (errorMessage.includes('QUOTA_EXCEEDED') || errorMessage.includes('429')) {
       userFriendlyMsg = 'Gemini API 호출 한도(Quota)가 초과되었습니다. 잠시 후 다시 시도해 주세요.';
+    } else if (errorMessage.includes('fetch failed') || errorMessage.includes('SocketError') || errorMessage.includes('UND_ERR_SOCKET')) {
+      userFriendlyMsg = '구글 AI 서버와의 통신이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.';
     }
 
     return NextResponse.json(
       {
         error: userFriendlyMsg,
+        food_name: '분석 실패',
+        calories: 0,
+        carbs: 0,
+        protein: 0,
+        fat: 0,
       },
       { status: 500 }
     );

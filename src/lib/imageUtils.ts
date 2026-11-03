@@ -1,8 +1,12 @@
 /**
- * Resizes and compresses an image file to reduce payload size
- * Returns a base64 Data URL
+ * Resizes and compresses an image file to reduce payload size and prevent network timeouts.
+ * Returns a base64 Data URL (JPEG, max 800px width/height, 0.75 quality).
  */
-export async function compressImage(file: File, maxWidth = 1200, quality = 0.8): Promise<string> {
+export async function compressImage(
+  file: File,
+  maxWidth = 800,
+  quality = 0.75
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
