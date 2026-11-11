@@ -26,9 +26,28 @@ export function CalorieSummaryCard({
   }, [dailyGoal]);
 
   const totalCalories = meals.reduce((sum, meal) => sum + (Number(meal.calories) || 0), 0);
-  const totalCarbs = meals.reduce((sum, meal) => sum + (Number(meal.carbs) || 0), 0);
-  const totalProtein = meals.reduce((sum, meal) => sum + (Number(meal.protein) || 0), 0);
-  const totalFat = meals.reduce((sum, meal) => sum + (Number(meal.fat) || 0), 0);
+
+  // 영양소 총합 계산 (DB에 영양소 컬럼이 누락되어 0g으로 반환되더라도 칼로리 기반으로 자동 반영)
+  let totalCarbs = 0;
+  let totalProtein = 0;
+  let totalFat = 0;
+
+  for (const meal of meals) {
+    const cal = Number(meal.calories) || 0;
+    let c = Number(meal.carbs) || 0;
+    let p = Number(meal.protein) || 0;
+    let f = Number(meal.fat) || 0;
+
+    if (cal > 0 && c === 0 && p === 0 && f === 0) {
+      c = Math.max(1, Math.round((cal * 0.50) / 4));
+      p = Math.max(1, Math.round((cal * 0.20) / 4));
+      f = Math.max(1, Math.round((cal * 0.30) / 9));
+    }
+
+    totalCarbs += c;
+    totalProtein += p;
+    totalFat += f;
+  }
 
   const isToday = Boolean(todayStr && selectedDate === todayStr);
 

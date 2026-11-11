@@ -3,6 +3,13 @@ import { Meal } from '@/types/meal';
 
 const LOCAL_STORAGE_MEALS_KEY = 'calorie_diary_local_meals';
 const LOCAL_STORAGE_CONFIG_KEY = 'calorie_diary_config';
+const LOCAL_STORAGE_MACROS_KEY = 'calorie_diary_macros_cache';
+
+export interface MacroData {
+  carbs: number;
+  protein: number;
+  fat: number;
+}
 
 export function sanitizeSupabaseUrl(url?: string): string {
   if (!url) return '';
@@ -87,6 +94,105 @@ export function getSupabaseClient(): SupabaseClient | null {
   }
 }
 
+// ============ Nutrition Macro Estimation & Caching Helpers ============
+
+/**
+ * 한국인 영양 섭취 기준(보건복지부 기준 탄50:단20:지30) 및 주요 음식 키워드를 활용한
+ * 현실적인 탄·단·지 그램(g) 자동 추정 계산기
+ */
+export function estimateMacrosFromCalories(calories: number, foodName = ''): MacroData {
+  const cal = Math.max(0, Math.round(Number(calories) || 0));
+  if (cal === 0) return { carbs: 0, protein: 0, fat: 0 };
+
+  const name = (foodName || '').toLowerCase();
+
+  // 고단백/육류/생선/두부류
+  if (
+    name.includes('닭가슴살') ||
+    name.includes('소고기') ||
+    name.includes('단백질') ||
+    name.includes('연어') ||
+    name.includes('계란') ||
+    name.includes('달걀') ||
+    name.includes('두부') ||
+    name.includes('프로틴') ||
+    name.includes('스테이크') ||
+    name.includes('돼지') ||
+    name.includes('삼겹살')
+  ) {
+    const protein = Math.max(1, Math.round((cal * 0.35) / 4));
+    const fat = Math.max(1, Math.round((cal * 0.35) / 9));
+    const carbs = Math.max(0, Math.round((cal - (protein * 4 + fat * 9)) / 4));
+    return { carbs, protein, fat };
+  }
+
+  // 고탄수화물 (밥, 면, 빵, 떡, 면류)
+  if (
+    name.includes('밥') ||
+    name.includes('면') ||
+    name.includes('라면') ||
+    name.includes('국수') ||
+    name.includes('빵') ||
+    name.includes('떡') ||
+    name.includes('파스타') ||
+    name.includes('우동') ||
+    name.includes('김밥') ||
+    name.includes('피자')
+  ) {
+    const carbs = Math.max(1, Math.round((cal * 0.65) / 4));
+    const protein = Math.max(1, Math.round((cal * 0.15) / 4));
+    const fat = Math.max(1, Math.round((cal * 0.20) / 9));
+    return { carbs, protein, fat };
+  }
+
+  // 일반 식사 (한국 표준 비율 50:20:30)
+  const carbs = Math.max(1, Math.round((cal * 0.50) / 4));
+  const protein = Math.max(1, Math.round((cal * 0.20) / 4));
+  const fat = Math.max(1, Math.round((cal * 0.30) / 9));
+  return { carbs, protein, fat };
+}
+
+export function getMacroCache(): Record<string, MacroData> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_MACROS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveMacrosToCache(keys: string[], macros: MacroData): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const cache = getMacroCache();
+    for (const key of keys) {
+      if (key && key.trim()) {
+        cache[key.trim()] = macros;
+      }
+    }
+    localStorage.setItem(LOCAL_STORAGE_MACROS_KEY, JSON.stringify(cache));
+  } catch (err) {
+    console.warn('Failed to save macro cache:', err);
+  }
+}
+
+export function getCachedMacros(id?: string, date?: string, foodName?: string, calories?: number): MacroData | null {
+  const cache = getMacroCache();
+  if (id && cache[String(id)]) {
+    return cache[String(id)];
+  }
+  if (date && foodName !== undefined && calories !== undefined) {
+    const compoundKey = `${date}_${foodName.trim()}_${calories}`;
+    if (cache[compoundKey]) return cache[compoundKey];
+  }
+  if (foodName !== undefined && calories !== undefined) {
+    const simpleKey = `${foodName.trim()}_${calories}`;
+    if (cache[simpleKey]) return cache[simpleKey];
+  }
+  return null;
+}
+
 // ============ Local Storage Fallback Helpers ============
 
 export function getLocalMeals(): Meal[] {
@@ -139,20 +245,50 @@ export async function fetchMealsByDate(date: string): Promise<{ meals: Meal[]; i
       };
     }
 
-    // Map fields if DB uses slightly different naming (e.g. name instead of food_name)
-    const formatted: Meal[] = (data || []).map((row) => ({
-      id: String(row.id),
-      food_name: row.food_name || row.name || '알 수 없는 음식',
-      calories: Number(row.calories) || 0,
-      carbs: typeof row.carbs === 'number' ? row.carbs : (Number(row.carbs) || 0),
-      protein: typeof row.protein === 'number' ? row.protein : (Number(row.protein) || 0),
-      fat: typeof row.fat === 'number' ? row.fat : (Number(row.fat) || 0),
-      date: row.date || date,
-      meal_type: row.meal_type || '기타',
-      description: row.description || null,
-      image_url: row.image_url || null,
-      created_at: row.created_at || new Date().toISOString(),
-    }));
+    // Map fields and resolve carbs, protein, fat from DB, persistent cache, or estimate
+    const formatted: Meal[] = (data || []).map((row) => {
+      const cal = Number(row.calories) || 0;
+      const foodName = row.food_name || row.name || '알 수 없는 음식';
+      const rowDate = row.date || date;
+
+      // 1. DB에 컬럼이 있어 유효한 값이 존재하는지 확인
+      let carbs = typeof row.carbs === 'number' && row.carbs > 0 ? row.carbs : undefined;
+      let protein = typeof row.protein === 'number' && row.protein > 0 ? row.protein : undefined;
+      let fat = typeof row.fat === 'number' && row.fat > 0 ? row.fat : undefined;
+
+      // 2. DB에 없으면(컬럼 부재) 저장 시 보관한 영양소 캐시에서 조회
+      if (carbs === undefined || protein === undefined || fat === undefined) {
+        const cached = getCachedMacros(String(row.id), rowDate, foodName, cal);
+        if (cached && (cached.carbs > 0 || cached.protein > 0 || cached.fat > 0)) {
+          carbs = carbs ?? cached.carbs;
+          protein = protein ?? cached.protein;
+          fat = fat ?? cached.fat;
+        }
+      }
+
+      // 3. 이전 기록이거나 캐시 미존재 시, 칼로리를 기반으로 표준 영양소 자동 계산
+      if (cal > 0 && (!carbs && !protein && !fat)) {
+        const est = estimateMacrosFromCalories(cal, foodName);
+        carbs = est.carbs;
+        protein = est.protein;
+        fat = est.fat;
+        saveMacrosToCache([String(row.id), `${rowDate}_${foodName}_${cal}`], est);
+      }
+
+      return {
+        id: String(row.id),
+        food_name: foodName,
+        calories: cal,
+        carbs: Math.max(0, Math.round(carbs || 0)),
+        protein: Math.max(0, Math.round(protein || 0)),
+        fat: Math.max(0, Math.round(fat || 0)),
+        date: rowDate,
+        meal_type: row.meal_type || '기타',
+        description: row.description || null,
+        image_url: row.image_url || null,
+        created_at: row.created_at || new Date().toISOString(),
+      };
+    });
 
     return { meals: formatted, isFallback: false };
   } catch (err: unknown) {
@@ -177,6 +313,28 @@ export async function insertMeal(meal: {
   const supabase = getSupabaseClient();
   const localId = `meal-${Date.now()}`;
 
+  // Ensure macros are positive numbers (estimate if user entered 0 or omitted but calories > 0)
+  let finalCarbs = typeof meal.carbs === 'number' ? meal.carbs : 0;
+  let finalProtein = typeof meal.protein === 'number' ? meal.protein : 0;
+  let finalFat = typeof meal.fat === 'number' ? meal.fat : 0;
+
+  if (meal.calories > 0 && finalCarbs === 0 && finalProtein === 0 && finalFat === 0) {
+    const est = estimateMacrosFromCalories(meal.calories, meal.food_name);
+    finalCarbs = est.carbs;
+    finalProtein = est.protein;
+    finalFat = est.fat;
+  }
+
+  const macroData: MacroData = {
+    carbs: Math.max(0, Math.round(finalCarbs)),
+    protein: Math.max(0, Math.round(finalProtein)),
+    fat: Math.max(0, Math.round(finalFat)),
+  };
+
+  // Cache by composite key and localId immediately
+  const compoundKey = `${meal.date}_${meal.food_name.trim()}_${meal.calories}`;
+  saveMacrosToCache([localId, compoundKey], macroData);
+
   // Keep local storage in sync
   const localMeals = getLocalMeals();
   localMeals.push({
@@ -184,15 +342,15 @@ export async function insertMeal(meal: {
     date: meal.date,
     food_name: meal.food_name,
     calories: meal.calories,
-    carbs: meal.carbs || 0,
-    protein: meal.protein || 0,
-    fat: meal.fat || 0,
+    carbs: macroData.carbs,
+    protein: macroData.protein,
+    fat: macroData.fat,
     created_at: new Date().toISOString(),
   });
   saveLocalMeals(localMeals);
 
   if (!supabase) {
-    return { success: true, data: { id: localId, ...meal } };
+    return { success: true, data: { id: localId, ...meal, ...macroData } };
   }
 
   try {
@@ -200,10 +358,10 @@ export async function insertMeal(meal: {
       date: meal.date,
       food_name: meal.food_name,
       calories: meal.calories,
+      carbs: macroData.carbs,
+      protein: macroData.protein,
+      fat: macroData.fat,
     };
-    if (typeof meal.carbs === 'number') recordWithMacros.carbs = meal.carbs;
-    if (typeof meal.protein === 'number') recordWithMacros.protein = meal.protein;
-    if (typeof meal.fat === 'number') recordWithMacros.fat = meal.fat;
 
     let { data, error } = await supabase
       .from('meals')
@@ -232,7 +390,12 @@ export async function insertMeal(meal: {
       return { success: false, error: error.message };
     }
 
-    return { success: true, data };
+    // Associate DB row ID with the cached macros!
+    if (data && data.id) {
+      saveMacrosToCache([String(data.id)], macroData);
+    }
+
+    return { success: true, data: { ...data, ...macroData } };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('insertMeal exception:', msg);
@@ -327,15 +490,39 @@ export async function fetchRecent7DaysSummary(endDateStr?: string): Promise<{
         .lte('date', finishDateStr);
 
       if (!error && data) {
-        allMeals = data.map((row) => ({
-          id: String(row.id),
-          food_name: row.food_name || row.name || '',
-          calories: Number(row.calories) || 0,
-          carbs: Number(row.carbs) || 0,
-          protein: Number(row.protein) || 0,
-          fat: Number(row.fat) || 0,
-          date: row.date,
-        }));
+        allMeals = data.map((row) => {
+          const cal = Number(row.calories) || 0;
+          const foodName = row.food_name || row.name || '';
+          let carbs = typeof row.carbs === 'number' && row.carbs > 0 ? row.carbs : undefined;
+          let protein = typeof row.protein === 'number' && row.protein > 0 ? row.protein : undefined;
+          let fat = typeof row.fat === 'number' && row.fat > 0 ? row.fat : undefined;
+
+          if (carbs === undefined || protein === undefined || fat === undefined) {
+            const cached = getCachedMacros(String(row.id), row.date, foodName, cal);
+            if (cached) {
+              carbs = carbs ?? cached.carbs;
+              protein = protein ?? cached.protein;
+              fat = fat ?? cached.fat;
+            }
+          }
+
+          if (cal > 0 && (!carbs && !protein && !fat)) {
+            const est = estimateMacrosFromCalories(cal, foodName);
+            carbs = est.carbs;
+            protein = est.protein;
+            fat = est.fat;
+          }
+
+          return {
+            id: String(row.id),
+            food_name: foodName,
+            calories: cal,
+            carbs: carbs || 0,
+            protein: protein || 0,
+            fat: fat || 0,
+            date: row.date,
+          };
+        });
       }
     } catch (err) {
       console.warn('Weekly supabase fetch error:', err);

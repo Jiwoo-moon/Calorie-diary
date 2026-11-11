@@ -30,8 +30,19 @@ export function MealCard({ meal, onDelete }: MealCardProps) {
     }
   };
 
-  const hasMacros =
-    meal.carbs !== undefined || meal.protein !== undefined || meal.fat !== undefined;
+  const cal = Number(meal.calories) || 0;
+  let displayCarbs = Number(meal.carbs) || 0;
+  let displayProtein = Number(meal.protein) || 0;
+  let displayFat = Number(meal.fat) || 0;
+
+  // DB 컬럼 누락 등으로 0g으로 전달되었더라도 칼로리를 바탕으로 영양소 자동 보정
+  if (cal > 0 && displayCarbs === 0 && displayProtein === 0 && displayFat === 0) {
+    displayCarbs = Math.max(1, Math.round((cal * 0.50) / 4));
+    displayProtein = Math.max(1, Math.round((cal * 0.20) / 4));
+    displayFat = Math.max(1, Math.round((cal * 0.30) / 9));
+  }
+
+  const hasMacros = cal > 0 || displayCarbs > 0 || displayProtein > 0 || displayFat > 0;
 
   return (
     <div className="w-full bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-5 flex items-center justify-between gap-4 transition hover:border-slate-300">
@@ -45,15 +56,15 @@ export function MealCard({ meal, onDelete }: MealCardProps) {
         {hasMacros && (
           <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-slate-500 font-medium">
             <span>
-              탄수화물 <strong className="text-amber-800">{meal.carbs || 0}g</strong>
+              탄수화물 <strong className="text-amber-800">{displayCarbs}g</strong>
             </span>
             <span className="text-slate-300">·</span>
             <span>
-              단백질 <strong className="text-sky-800">{meal.protein || 0}g</strong>
+              단백질 <strong className="text-sky-800">{displayProtein}g</strong>
             </span>
             <span className="text-slate-300">·</span>
             <span>
-              지방 <strong className="text-rose-800">{meal.fat || 0}g</strong>
+              지방 <strong className="text-rose-800">{displayFat}g</strong>
             </span>
           </div>
         )}
