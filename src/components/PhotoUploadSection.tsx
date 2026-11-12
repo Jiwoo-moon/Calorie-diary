@@ -42,6 +42,7 @@ export function PhotoUploadSection({
 
   const resetForm = () => {
     setSelectedImage(null);
+    setShowManualInput(false);
     setAnalysisError(null);
     setSaveError(null);
     setFoodName('');
@@ -51,6 +52,9 @@ export function PhotoUploadSection({
     setFat('');
     setIsAnalyzing(false);
     setIsSaving(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   const processAndAnalyzeImage = async (file: File) => {
